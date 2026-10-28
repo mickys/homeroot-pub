@@ -1,0 +1,15 @@
+# Stock Yeelight layout dumped from ceiling10 (miIO 0.0.6) and lamp9 (miIO 0.0.9).
+# Same labels and sizes. A miIO.ota write does not replace this table; the
+# application must still be linked to the 1920 KiB slot. Do not full-flash
+# this file onto the lamp unless that is the explicit request.
+# Name,        Type, SubType,  Offset,   Size
+nvs,           data, nvs,      0x9000,   0x4000
+otadata,       data, ota,      0xD000,   0x2000
+phy_init,      data, phy,      0xF000,   0x1000
+miio_fw1,      app,  ota_0,    0x10000,  0x1E0000
+miio_fw2,      app,  ota_1,    0x1F0000, 0x1E0000
+test,          app,  test,     0x3D0000, 0x13000
+mfi_p,         data, spiffs,   0x3E3000, 0x1000
+factory_nvs,   data, nvs,      0x3E4000, 0x4000
+coredump,      data, coredump, 0x3E8000, 0x10000
+minvs,         data, 0xfe,     0x3F8000, 0x4000

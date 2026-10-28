@@ -1,0 +1,18 @@
+# Copy this file once per lamp. Set device_id to that lamp's miIO device id.
+
+substitutions:
+  node_name: ceiling
+  device_id: "000000000"
+  bridge_name: "Ceiling"
+  ceiling_name: "Ceiling"
+  night_name: "Ceiling night light"
+  restore_after_power_loss: "true"
+  default_brightness: "100%"
+  default_mireds: "175"
+  remote_mac: "02:00:00:00:00:01"
+  remote_product_id: "950"
+  remote_rssi_name: "Remote RSSI"
+  remote_key_name: "Remote bind key"
+
+packages:
+  mjxdd01syl: !include mjxdd01syl.yaml

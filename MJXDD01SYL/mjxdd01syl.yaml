@@ -1,0 +1,266 @@
+# MJXDD01SYL / yeelink.light.ceiling22. Application image only.
+# The app slot is 1920 KiB. Leave the bootloader and the partition table
+# alone. CONFIG_PARTITION_TABLE_MD5 stays off. CONFIG_FREERTOS_UNICORE
+# stays on. A lamp yaml in this folder overrides the substitutions.
+
+substitutions:
+  node_name: mjxdd01syl
+  device_id: "000000000"
+  bridge_name: "MJXDD01SYL"
+  ceiling_name: "Ceiling"
+  night_name: "Ceiling night light"
+  restore_after_power_loss: "true"
+  default_brightness: "100%"
+  default_mireds: "175"
+  remote_mac: "02:00:00:00:00:01"
+  remote_product_id: "950"
+  remote_rssi_name: "Remote RSSI"
+  remote_key_name: "Remote bind key"
+
+esphome:
+  name: ${node_name}
+  min_version: 2026.1.0
+  includes:
+    - tools/probe_flash.h
+
+esp32:
+  board: esp32doit-devkit-v1
+  partitions: partitions.csv
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_FREERTOS_UNICORE: y
+      CONFIG_COMPILER_OPTIMIZATION_SIZE: y
+      CONFIG_LWIP_MAX_SOCKETS: "16"
+      CONFIG_MBEDTLS_HKDF_C: y
+      CONFIG_PARTITION_TABLE_MD5: n
+    advanced:
+      ignore_efuse_mac_crc: true
+      ignore_efuse_custom_mac: true
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components:
+      - homekit
+      - homekit_base
+      - ylkg_pair
+      - ble_gateway
+
+wifi:
+  ssid: !secret wifi_network
+  password: !secret wifi_password
+  min_auth_mode: WPA2
+  fast_connect: true
+  ap:
+    ssid: "${node_name} Fallback"
+    password: !secret fallback_wifi_password
+
+captive_portal:
+
+logger:
+  level: DEBUG
+  baud_rate: 0
+  tx_buffer_size: 4096
+  logs:
+    esp32_ble_tracker: INFO
+    esp32_ble: INFO
+    esp32_ble_client: INFO
+    ble_client: INFO
+    ylkg_pair: INFO
+    ble_gateway: INFO
+
+api:
+  actions:
+    - action: dump_flash
+      variables:
+        offset: int
+        length: int
+      then:
+        - lambda: flash_probe::dump_flash(offset, length);
+    - action: dump_otadata
+      variables:
+        offset: int
+        length: int
+      then:
+        - lambda: flash_probe::dump_otadata(offset, length);
+    - action: log_slots
+      then:
+        - lambda: flash_probe::log_slots();
+    - action: redump_config
+      then:
+        - lambda: App.schedule_dump_config();
+    - action: pair_remote
+      then:
+        - lambda: id(ylkg)->open();
+    - action: stop_remote_pairing
+      then:
+        - lambda: id(ylkg)->close();
+    - action: set_remote
+      variables:
+        mac: string
+        key: string
+        product_id: int
+      then:
+        - lambda: id(ylkg)->set_remote(mac.c_str(), mac.size(), key.c_str(), key.size(), product_id);
+    - action: set_ble_gateway
+      variables:
+        host: string
+        port: int
+        enable: bool
+      then:
+        - lambda: id(ceiling_gateway)->configure(host.c_str(), host.size(), port, enable);
+    - action: set_ble_gateway_key
+      variables:
+        key: string
+      then:
+        - lambda: id(ceiling_gateway)->set_key(key.c_str(), key.size());
+
+ota:
+  platform: esphome
+  password: !secret ota_password
+
+debug:
+
+esp32_ble:
+  max_connections: 1
+
+esp32_ble_tracker:
+  setup_priority: -900
+  scan_parameters:
+    interval: 320ms
+    window: 320ms
+    active: false
+
+ble_client:
+  - mac_address: ${remote_mac}
+    id: ylkg_remote
+    auto_connect: false
+
+ylkg_pair:
+  id: ylkg
+  ble_client_id: ylkg_remote
+  product_id: ${remote_product_id}
+  key_sensor: remote_bindkey
+  ceiling: ceiling_light
+  night: night_light
+
+# No receiver here. A lamp file adds one. Until then the relay stays off.
+ble_gateway:
+  id: ceiling_gateway
+
+text_sensor:
+  - platform: template
+    name: ${remote_key_name}
+    id: remote_bindkey
+    update_interval: never
+
+sensor:
+  - platform: adc
+    pin: GPIO36
+    name: "Supply sense"
+    attenuation: 12db
+  - platform: ble_rssi
+    mac_address: ${remote_mac}
+    name: ${remote_rssi_name}
+
+output:
+  - platform: ledc
+    pin: GPIO19
+    id: output_warm
+    frequency: 2kHz
+    min_power: 0.14
+    max_power: 0.50
+    zero_means_zero: true
+    power_supply: power_supply1
+  - platform: ledc
+    pin: GPIO21
+    id: output_cold
+    frequency: 2kHz
+    min_power: 0.20
+    max_power: 0.88
+    zero_means_zero: true
+    power_supply: power_supply1
+  - platform: ledc
+    pin: GPIO23
+    id: output_nightlight
+    frequency: 20kHz
+    min_power: 0.10
+    max_power: 1.00
+    zero_means_zero: true
+    power_supply: power_supply1
+
+power_supply:
+  - id: power_supply1
+    pin: GPIO22
+    keep_on_time: 0s
+
+light:
+  - platform: monochromatic
+    name: ${night_name}
+    id: night_light
+    output: output_nightlight
+    gamma_correct: 0
+    default_transition_length: 0s
+    restore_mode: RESTORE_DEFAULT_OFF
+    initial_state:
+      brightness: ${default_brightness}
+    on_turn_on:
+      - light.turn_off: ceiling_light
+  - platform: cwww
+    name: ${ceiling_name}
+    id: ceiling_light
+    cold_white: output_cold
+    warm_white: output_warm
+    cold_white_color_temperature: 6000 K
+    warm_white_color_temperature: 2700 K
+    constant_brightness: true
+    gamma_correct: 0
+    default_transition_length: 0s
+    restore_mode: RESTORE_DEFAULT_OFF
+    initial_state:
+      brightness: ${default_brightness}
+      color_temperature: ${default_mireds} mireds
+    on_turn_on:
+      - light.turn_off: night_light
+
+homekit_base:
+  port: 32042
+  setup_code: !secret homekit_setup_code
+  setup_id: !secret homekit_setup_id
+  meta:
+    name: ${bridge_name}
+    manufacturer: "HomeRoot"
+    model: "MJXDD01SYL"
+    serial_number: "${device_id}-bridge"
+    fw_rev: "0.1.1"
+
+homekit:
+  restore_after_power_loss:
+    default: ${restore_after_power_loss}
+    lights:
+      - ceiling_light
+      - night_light
+  light:
+    - id: ceiling_light
+      restore_switch: true
+      pair_switch: true
+      meta:
+        name: ${ceiling_name}
+        manufacturer: "Yeelight Technology"
+        model: "MJXDD01SYL"
+        serial_number: ${device_id}
+        fw_rev: "0.1.1"
+    - id: night_light
+      meta:
+        name: ${night_name}
+        manufacturer: "Yeelight Technology"
+        model: "MJXDD01SYL"
+        serial_number: "${device_id}-night"
+        fw_rev: "0.1.1"
+
+button:
+  - platform: homekit_base
+    factory_reset:
+      name: "Reset HomeKit pairings"
