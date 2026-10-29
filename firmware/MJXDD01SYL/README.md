@@ -124,24 +124,39 @@ ESPHome reads `ota_password` from `secrets.yaml`. OTA listens on port 3232. Do n
 
 ## Flash a lamp that is still on stock firmware
 
+Do these in order. The lamp has to be registered in Xiaomi Home before the update is sent. The update itself goes through that cloud account. This model does not accept `miIO.ota` on local UDP port 54321.
+
 A miIO 0.0.6 updater accepts an application image only when all of the following are true:
 
 - The image was built with `CONFIG_FREERTOS_UNICORE` on and `CONFIG_PARTITION_TABLE_MD5` off. This project already does that.
 - A 4-byte Xiaomi trailer is appended with `tools/append_crc.py`.
 - The file is served with HTTP/1.1, including Range requests, on port 80. Python's `http.server` speaks HTTP/1.0 and the download does not finish.
-- The URL given to the lamp has no port in it: `http://<host>/fw_crc.bin`.
+- The URL given to the lamp has no port in it: `http://<lan-address-of-the-server>/fw_crc.bin`.
 - The bootloader and the partition table on the chip are not written.
 
-miIO 0.0.9 lamps use the same image. The trailer and the portless URL are what 0.0.6 needs. If a 0.0.9 ceiling rejects the trailer, serve `firmware.ota.bin` itself on port 80 with the same URL shape.
+miIO 0.0.9 lamps use the same image and the same portless URL. If a 0.0.9 ceiling rejects the trailer, serve `firmware.ota.bin` itself on port 80 with the same URL shape.
 
-1. Fill in `secrets.yaml` and the lamp yaml.
-2. Compile it.
+### 1. Register the lamp in Xiaomi Home
+
+Add the ceiling in the Xiaomi Home app with the account that will send the update. Wait until that home shows the lamp online. A lamp that is not on the account cannot be selected for the cloud relay.
+
+In the app, or in the cloud device list after the login below, record:
+
+- the device id (`did`), a decimal number
+- the region of that account: `cn`, `de`, `us`, `ru`, `tw`, `sg`, `in`, or `i2`
+- the lamp's LAN address
+
+Put that device id in the lamp yaml as `device_id` before compiling. It becomes the HomeKit serial. The cloud list must show model `yeelink.light.ceiling22` for that id.
+
+### 2. Build the image and start the file server
+
+Fill in `secrets.yaml` and the lamp yaml, then compile from this directory.
 
 ```sh
 esphome compile example.yaml
 ```
 
-3. Check the size, then append the trailer for a 0.0.6 lamp.
+The image is `.esphome/build/<node name>/build/firmware.ota.bin`. It has to be `1966080` bytes or smaller. Append the trailer for a miIO 0.0.6 lamp:
 
 ```sh
 python3 tools/append_crc.py \
@@ -149,14 +164,47 @@ python3 tools/append_crc.py \
   firmware.crc.bin
 ```
 
-4. Serve that file on port 80. The server answers every path with the one file. Stop it after the lamp has downloaded.
+Serve that one file on port 80 from a machine the lamp can reach on the LAN. The server answers every path with the same file. Leave it running until the lamp has downloaded the image, then stop it. The image contains the Wi-Fi password and the HomeKit setup code.
 
 ```sh
 python3 tools/ota_server.py firmware.crc.bin 80
 ```
 
-5. Send `miIO.ota` for that device id only. This model refuses the call on local UDP 54321. The Mi Home cloud relays it. `app_url` is `http://<the machine running ota_server>/fw_crc.bin`, with no port in the URL.
-6. The lamp fetches the file, reports installed, and reboots as the `node_name` in its yaml. Stock HomeKit does not come with it. Pair the new bridge on port 32042 with `homekit_setup_code`.
-7. Stop `ota_server.py`.
+`app_url` is `http://<lan-address-of-that-machine>/fw_crc.bin`. There is no port in the URL.
+
+### 3. Log in with a QR code
+
+Password login stops on a captcha. Use the QR login in [Xiaomi Cloud Tokens Extractor](https://github.com/PiotrMachowski/Xiaomi-cloud-tokens-extractor): run it and choose `q`.
+
+The login returns one QR image and a poll timeout of about 300 seconds. Open the image for this attempt, then leave the login process running until it reports that the login succeeded. If that process exits, the poll dies and the code is no longer valid.
+
+Save each attempt as a new PNG and open that file:
+
+```sh
+install -m 644 "$downloaded_qr" "xiaomi-qr-$(date +%s).png"
+```
+
+A viewer that keeps a file open from the previous path shows the expired code. The extractor also serves the current image at `http://127.0.0.1:31415` while that process is still running. If port 31415 is already taken, it writes a temp file instead. Open the file printed for this attempt.
+
+Scan the code with the Xiaomi Home app on the phone that is logged into the same account, before the timeout. If the poll expires, start the login again, save a new PNG, and scan that file.
+
+Do not write the login URL, the service token, or the account password into a log.
+
+### 4. Confirm the registered lamp, then send the update
+
+With that login, list the devices in the account region. Continue only when the list contains the lamp from step 1: the same `did`, model `yeelink.light.ceiling22`, online, and the LAN address of the ceiling you mean to flash. If it is missing, go back to step 1. Do not send the update to another device id.
+
+The cloud call is encrypted. It goes to `https://<region>.api.io.mi.com/app/home/rpc/<did>`. The China host has no region label: `https://api.io.mi.com/app/home/rpc/<did>`. Use the same logged-in client that listed the device. A plain POST without that encryption is refused.
+
+1. Call `miIO.info`. Keep the stock firmware version and the miIO version it returns.
+2. Call `miIO.get_ota_state`. Send the update only when the state is `idle`.
+3. Call `miIO.ota` with one parameter, `app_url` set to the portless URL from step 2. The result is `ok` when the relay accepted it.
+4. Call `miIO.get_ota_state` about every 5 seconds. Stop when the state is `installed` or `failed`.
+
+The HTTP log from `ota_server.py` must show one complete GET of the whole file from the lamp's address. A complete download, followed by the ESPHome API on port 6053 and HomeKit on port 32042, means the image is on the lamp even when the cloud state comes back empty after the reboot. Do not send a second `miIO.ota` after that complete download.
+
+Stop `ota_server.py` once the download has finished.
+
+The lamp reboots as `node_name`. Stock HomeKit does not come with it. Pair the new bridge on port 32042 with `homekit_setup_code`. If discovery skips the accessory because it still looks paired, press "Reset HomeKit pairings" once, then pair.
 
 After that, further updates use the ESPHome upload in the previous section.
