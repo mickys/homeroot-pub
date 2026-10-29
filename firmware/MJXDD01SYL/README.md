@@ -16,7 +16,7 @@ Restore after power loss is a switch on the ceiling bulb. `restore_after_power_l
 
 A Yeelight BLE dimmer can drive the lamp. Product 950 is the YLKG07YL / YLKG08YL. A click toggles the active channel. A double click swaps the ceiling and the night channel, and if both are off it only selects the other channel. Rotation dims. Dimming does not turn the channel off. Long-press and pressed-rotate are ignored. The pair window stays closed at boot. `pair_remote` or the HomeKit switch "Pair remote" opens it for 60 seconds. `set_remote` stores a MAC, a 12-byte key, and an optional product id (`0` keeps the current product). The lamp answers that MAC only when the key decrypts the advert. The key is not written into the yaml and is not logged.
 
-The BLE relay forwards advertisements to one LAN address as authenticated UDP. Leave the receiver block out and the relay stays off. `enabled: true` is the cold-boot default that turns it on. A receiver stored on the lamp replaces that default. `set_ble_gateway` stores the host, port, and enable flag. `set_ble_gateway_key` stores the 16-byte key. Without a key the relay does not send.
+The BLE relay forwards advertisements to one LAN address as authenticated UDP. The UDP source address is the lamp that forwarded the advertisement. Leave the receiver block out and the relay stays off. `enabled: true` is the cold-boot default that turns it on. A receiver stored on the lamp replaces that default. `set_ble_gateway` stores the host, port, and enable flag. `set_ble_gateway_key` stores the 16-byte key. Without a key the relay does not send.
 
 The fallback AP is `<node_name> Fallback`. Its captive portal uses port 80. Wi-Fi uses DHCP. The vendor MAC CRC is ignored, so the address the lamp had on stock firmware can change.
 
@@ -29,11 +29,29 @@ The ESPHome API is plaintext. OTA has a password. API actions:
 | `dump_flash`, `dump_otadata`, `log_slots` | Read-only flash slot dump |
 | `redump_config` | Log the running config |
 | `pair_remote`, `stop_remote_pairing` | Open or close the 60 second dimmer window |
-| `set_remote` | Store `mac`, `key`, and optional `product_id` |
+| `set_remote` | Store `mac`, `key`, and optional `product_id`. A zero MAC or a short key is rejected |
 | `set_ble_gateway` | Store `host`, `port`, and `enable` |
 | `set_ble_gateway_key` | Store the 16-byte relay key as 32 hex digits |
 
-A value already stored on the lamp wins over the yaml: the restore switch, the saved light level, the remote, and the receiver.
+A value already stored on the lamp wins over the yaml: the restore switch, the saved light level, the remote, and the receiver. A stored record survives an OTA update.
+
+## Findings
+
+### The 15 minute flicker
+
+ESPHome reboots a device when no native API client has been connected for 15 minutes. The log line is `No clients; rebooting`. HomeKit does not hold that connection, so a HomeKit-only lamp restarts on that timer. The bulbs drop for about two seconds, then restore-after-power-loss brings the saved level back. A controller that polls slowly often records no on/off, and a wall switch that mirrors only explicit on and off edges does not click. Free heap at boot stays normal. This is the API timer, not an out-of-memory reset. This package sets `api.reboot_timeout` to `0s`. The Wi-Fi reboot timer stays at its default and fires only while Wi-Fi is down.
+
+### Detach a dimmer with set_remote
+
+`set_remote` replaces the stored remote. It does not clear one. The MAC is 6 bytes, 12 hex digits, with optional `:` or `-`. The call is stored only when that MAC is nonzero and the key is exactly 12 bytes. `000000000001` meets that rule. After it is stored the lamp answers only that address, so the real dimmer no longer matches. `000000000000`, a shorter string, or a key that is not 12 bytes is rejected and the previous record stays. `product_id` 0 keeps the current product. The key does not have to be the dimmer's key when the MAC is not the dimmer. Changing `remote_mac` in yaml does not move a remote that is already stored.
+
+### A slow HomeKit button with a normal signal
+
+The BLE scan runs continuously. `interval` and `window` are both 320 ms, so a dimmer press is not missed. That scan shares the single radio with Wi-Fi. Lamps on the same access point can show similar signal strength while one of them drops the first TCP packet to HomeKit port 32042. The sender retries about a second later, and that is the delay on the on/off control. Compare the time to connect to port 32042. A slightly weaker signal does not by itself explain a one-second gap when the other lamps on that access point answer in a few tens of milliseconds.
+
+### An ESPHome upload that fails to prepare
+
+`esphome upload` can return `Unknown error from ESP` while receiving the update prepare result. The API port may then stop answering for a short time. Wait until port 6053 accepts a connection and upload the same `firmware.ota.bin` once more. That failure is not by itself a bad image.
 
 ## Hardware
 
@@ -120,7 +138,7 @@ esphome upload example.yaml --device <lamp-address> \
   --ota-platform esphome
 ```
 
-ESPHome reads `ota_password` from `secrets.yaml`. OTA listens on port 3232. Do not pass `--bootloader` or `--partition-table`. The vendor MAC is ignored, so a later boot can take a different DHCP address.
+ESPHome reads `ota_password` from `secrets.yaml`. OTA listens on port 3232. Do not pass `--bootloader` or `--partition-table`. The vendor MAC is ignored, so a later boot can take a different DHCP address. If the upload reports `Unknown error from ESP` at the prepare step, wait until port 6053 answers and send the same file once more.
 
 ## Flash a lamp that is still on stock firmware
 
