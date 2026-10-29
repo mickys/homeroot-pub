@@ -72,6 +72,9 @@ logger:
     ble_gateway: INFO
 
 api:
+  # HomeKit is the controller. The default 15 minute API timer reboots the
+  # lamp when no native client is connected.
+  reboot_timeout: 0s
   actions:
     - action: dump_flash
       variables:
